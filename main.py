@@ -8,7 +8,14 @@ import motor.motor_asyncio
 
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
+if TOKEN:
+    TOKEN = TOKEN.strip().strip('"').strip("'")
+    if TOKEN.lower().startswith("token:"):
+        TOKEN = TOKEN.split(":", 1)[1].strip()
+
 MONGO_URI = os.getenv('MONGO_URI')
+if MONGO_URI:
+    MONGO_URI = MONGO_URI.strip().strip('"').strip("'")
 
 QUESTIONS = [
     {"q": "O que é Roleplay (RP)?", "opts": ["Jogar sem seguir nenhuma regra", "Interpretar um personagem dentro da realidade do servidor", "Fazer tudo que quiser dentro do jogo", "Sair do personagem quando estiver perdendo"], "ans": 1},
@@ -2085,7 +2092,17 @@ class UnimedBot(commands.Bot):
 bot = UnimedBot()
 
 if MONGO_URI:
-    mongo_client = motor.motor_asyncio.AsyncIOMotorClient(MONGO_URI)
+    try:
+        import certifi
+        mongo_client = motor.motor_asyncio.AsyncIOMotorClient(
+            MONGO_URI,
+            tlsCAFile=certifi.where()
+        )
+    except Exception as e:
+        mongo_client = motor.motor_asyncio.AsyncIOMotorClient(
+            MONGO_URI,
+            tlsAllowInvalidCertificates=True
+        )
     db = mongo_client['unimed_bot']
     print("MongoDB configurado!", flush=True)
 
