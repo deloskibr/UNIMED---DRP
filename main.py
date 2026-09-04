@@ -259,6 +259,18 @@ class RecruitmentView(ui.View):
     @discord.ui.button(label='INICIAR RECRUTAMENTO', style=discord.ButtonStyle.success, emoji='📋', custom_id='iniciar_recrutamento_btn')
     async def iniciar_btn(self, interaction: discord.Interaction, button: ui.Button):
         guild = interaction.guild
+        member = guild.get_member(interaction.user.id)
+        
+        # Bloquear quem já é membro da UNIMED
+        membro_role_id = 1545262380286611559
+        if member and any(r.id == membro_role_id for r in member.roles):
+            embed_negado = discord.Embed(
+                title="❌ Acesso Negado",
+                description="Você **já faz parte da UNIMED** e não pode realizar o recrutamento novamente.",
+                color=0xff0000
+            )
+            return await interaction.response.send_message(embed=embed_negado, ephemeral=True)
+        
         category_id = 1545278162173296730
         category = guild.get_channel(category_id)
         
@@ -289,6 +301,23 @@ class RecruitmentView(ui.View):
 
             await new_channel.send(content=f"{interaction.user.mention}, bem-vindo ao seu teste prático!", embed=embed, view=quiz_view)
             await interaction.response.send_message(f'✅ **Tudo pronto!** Vá para o canal {new_channel.mention} para iniciar o seu teste.', ephemeral=True)
+            
+            # Fechar automaticamente após 10 minutos, independente de resposta
+            async def auto_fechar_canal(channel, user_mention):
+                await asyncio.sleep(600)  # 10 minutos
+                try:
+                    embed_timeout = discord.Embed(
+                        title="⏰ Tempo Esgotado",
+                        description=f"{user_mention}, o tempo para o teste acabou. Este canal será fechado.",
+                        color=0xff0000
+                    )
+                    await channel.send(embed=embed_timeout)
+                    await asyncio.sleep(5)
+                    await channel.delete()
+                except:
+                    pass  # Canal já foi deletado (quiz concluído)
+                    
+            asyncio.create_task(auto_fechar_canal(new_channel, interaction.user.mention))
         except Exception as e:
             import sys
             print(f"Erro ao criar canal: {e}", flush=True)
@@ -362,6 +391,22 @@ class RegistrationModal(ui.Modal, title='Registro de Membro'):
                     {"$set": {"nome_jogo": nome_jogo, "id_jogo": id_jogo, "apelido": novo_apelido}},
                     upsert=True
                 )
+            
+            # Log de registro
+            import datetime
+            log_channel = interaction.guild.get_channel(1545405622688686160)
+            if log_channel:
+                time_str = datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+                log_embed = discord.Embed(
+                    title="📋 Novo Registro",
+                    color=0x2ecc71
+                )
+                log_embed.add_field(name="👤 Usuário", value=f"{interaction.user.mention} (`{interaction.user.id}`)", inline=False)
+                log_embed.add_field(name="🎮 Nome escolhido", value=f"`{nome_jogo}`", inline=True)
+                log_embed.add_field(name="🪪 ID (Passaporte)", value=f"`{id_jogo}`", inline=True)
+                log_embed.add_field(name="🕐 Data/Hora", value=time_str, inline=False)
+                log_embed.set_thumbnail(url=interaction.user.display_avatar.url)
+                await log_channel.send(embed=log_embed)
         except discord.Forbidden:
             embed_erro_perm = discord.Embed(
                 title="✅ Registro Salvo!",
@@ -1776,33 +1821,7 @@ class SupportSelect(ui.Select):
         except Exception as e:
             return await interaction.followup.send(f"❌ Erro ao criar o ticket. Verifique as permissões do bot. ({e})", ephemeral=True)
             
-        # Log Inicial
-        log_msg_id = None
-        if MONGO_URI:
-            log_channel = guild.get_channel(1545461015691395122)
-            if log_channel:
-                import datetime
-                time_str = datetime.datetime.now().strftime("%d/%m/%Y %H:%M")
-                log_embed = discord.Embed(
-                    title="🎫 Ticket Criado",
-                    description=f"👤 Usuário: {user.mention}\n📁 Categoria: {value.capitalize()}\n🕐 Aberto em: {time_str}\n🟡 Status: Aguardando atendimento\n🙋 Responsável: Ninguém",
-                    color=0xf1c40f
-                )
-                try:
-                    log_msg = await log_channel.send(embed=log_embed)
-                    log_msg_id = log_msg.id
-                    
-                    await db.tickets.insert_one({
-                        "channel_id": ticket_channel.id,
-                        "log_msg_id": log_msg_id,
-                        "opener_id": user.id,
-                        "assumed_by": None,
-                        "status": "Aguardando",
-                        "category": value
-                    })
-                except Exception as e:
-                    print("Erro log db:", e)
-
+        # 1. Enviar instantaneamente o painel no canal do ticket
         embed = discord.Embed(
             title=f"Ticket - {user.display_name}",
             description=f"Bem-vindo(a) ao suporte da **UNIMED DRP**.\nCategoria: **{value.capitalize()}**.\n\nNossa equipe foi notificada e irá te atender em breve.\nAguarde um membro da equipe assumir o atendimento.",
@@ -1813,13 +1832,38 @@ class SupportSelect(ui.Select):
         await ticket_channel.send(content=f"{user.mention}", embed=embed, view=TicketPanelView())
         await interaction.followup.send(f"✅ Seu ticket foi aberto com sucesso: {ticket_channel.mention}", ephemeral=True)
         
-        # Resetar o select menu para o estado original (sem opção selecionada)
+        # Resetar o select menu para o estado original
         try:
-            fresh_view = SupportView()
-            await interaction.message.edit(view=fresh_view)
+            await interaction.message.edit(view=SupportView())
         except:
             pass
 
+        # 2. Registrar log no canal e no MongoDB em segundo plano (sem atrasar a exibição)
+        async def registrar_log_background(ch_id, uid, cat_val):
+            if not MONGO_URI: return
+            log_channel = guild.get_channel(1545461015691395122)
+            if log_channel:
+                import datetime
+                time_str = datetime.datetime.now().strftime("%d/%m/%Y %H:%M")
+                log_embed = discord.Embed(
+                    title="🎫 Ticket Criado",
+                    description=f"👤 Usuário: <@{uid}>\n📁 Categoria: {cat_val.capitalize()}\n🕐 Aberto em: {time_str}\n🟡 Status: Aguardando atendimento\n🙋 Responsável: Ninguém",
+                    color=0xf1c40f
+                )
+                try:
+                    log_msg = await log_channel.send(embed=log_embed)
+                    await db.tickets.insert_one({
+                        "channel_id": ch_id,
+                        "log_msg_id": log_msg.id,
+                        "opener_id": uid,
+                        "assumed_by": None,
+                        "status": "Aguardando",
+                        "category": cat_val
+                    })
+                except Exception as e:
+                    print("Erro log db background:", e)
+
+        asyncio.create_task(registrar_log_background(ticket_channel.id, user.id, value))
 
 class SupportView(ui.View):
     def __init__(self):
@@ -1844,6 +1888,7 @@ class UnimedBot(commands.Bot):
         self.add_view(SupportView())
         self.add_view(TicketPanelView())
         self.rank_mensal.start()
+        self.verificar_testes_expirados.start()
 
     @tasks.loop(minutes=60)
     async def rank_mensal(self):
@@ -1933,6 +1978,33 @@ class UnimedBot(commands.Bot):
 
     @rank_mensal.before_loop
     async def before_rank_mensal(self):
+        await self.wait_until_ready()
+
+    @tasks.loop(minutes=1)
+    async def verificar_testes_expirados(self):
+        category_id = 1545278162173296730
+        category = self.get_channel(category_id)
+        if not category:
+            return
+        agora = discord.utils.utcnow()
+        for channel in category.text_channels:
+            if channel.name.startswith("teste-"):
+                segundos_aberto = (agora - channel.created_at).total_seconds()
+                if segundos_aberto >= 600:  # 10 minutos
+                    try:
+                        embed_timeout = discord.Embed(
+                            title="⏰ TEMPO ESGOTADO!",
+                            description="Os 10 minutos para concluir o teste se esgotaram.\nEste canal será fechado agora.",
+                            color=0xff0000
+                        )
+                        await channel.send(embed=embed_timeout)
+                        await asyncio.sleep(4)
+                        await channel.delete()
+                    except Exception as e:
+                        print(f"Erro ao fechar canal expirado {channel.name}: {e}")
+
+    @verificar_testes_expirados.before_loop
+    async def before_verificar_testes_expirados(self):
         await self.wait_until_ready()
 
     async def on_message(self, message):
