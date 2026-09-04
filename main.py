@@ -2022,38 +2022,7 @@ class UnimedBot(commands.Bot):
         if isinstance(message.channel, discord.TextChannel):
             topic = message.channel.topic or ""
             if "Opener:" in topic and "Categoria:" in topic:
-                is_staff = any(r.id == staff_role_id for r in message.author.roles)
-                
-                opener_id = None
-                assumed_by = None
-                for part in topic.split(" | "):
-                    if part.startswith("Opener:"):
-                        opener_id = part.split(":")[1]
-                    elif part.startswith("Assumed:"):
-                        assumed_by = part.split(":")[1]
-                
-                if is_staff and assumed_by != str(message.author.id) and str(message.author.id) != opener_id:
-                    await message.delete()
-                    
-                    embed_aviso = discord.Embed(
-                        title="Acesso Negado",
-                        description=f"❌ Você não pode enviar mensagens neste ticket ({message.channel.name}) pois não assumiu o atendimento.",
-                        color=0xff0000
-                    )
-                    await message.channel.send(content=message.author.mention, embed=embed_aviso, view=DeleteMessageView(message.author.id))
-                    
-                    # Avisa o dono real na DM (opcional, mantendo o requerimento anterior)
-                    try:
-                        if assumed_by and assumed_by != "0":
-                            real_assumed = self.get_user(int(assumed_by))
-                            if real_assumed:
-                                await real_assumed.send(f"⚠️ O membro da equipe {message.author.mention} tentou enviar uma mensagem no seu ticket ({message.channel.mention}) sem ter assumido o atendimento.")
-                    except:
-                        pass
-                        
-                    return # Stop here for unauthorized staff
-                        
-                # Filtro Anti-Desrespeito (Aplica-se ao opener e ao staff que assumiu)
+                # Filtro Anti-Desrespeito (Aplica-se a todos no ticket)
                 swear_words = ["fdp", "filho da puta", "arrombado", "vsf", "vai se foder", "cuzão", "cuzao", "merda", "bosta", "desgraça", "desgraca", "viado", "puta", "lixo", "corno", "macaco", "otario", "otário", "trouxa"]
                 msg_lower = message.content.lower().replace("0", "o").replace("1", "i").replace("3", "e").replace("4", "a").replace("5", "s").replace("@", "a")
                 
